@@ -151,23 +151,40 @@ class VoiceService : Service(), RecognitionListener {
 
     override fun onError(error: Int) {
         val message = when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH -> "Nem értettem a beszédet. Újra figyelek."
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Nem hallottam beszédet. Újra figyelek."
-            SpeechRecognizer.ERROR_AUDIO -> "Mikrofonhiba."
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Nincs mikrofonengedély."
-            SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Beszédfelismerési hálózati hiba."
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "A beszédfelismerő foglalt."
+            SpeechRecognizer.ERROR_AUDIO -> "HIBA: a beszédfelismerő mikrofonhibát jelzett (error $error)."
+            SpeechRecognizer.ERROR_CLIENT -> "HIBA: a beszédfelismerő kliens leállt (error $error)."
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "HIBA: nincs mikrofonengedély (error $error)."
+            SpeechRecognizer.ERROR_NETWORK -> "HIBA: hálózati beszédfelismerési hiba (error $error)."
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "HIBA: időtúllépés a beszédfelismerésnél (error $error)."
+            SpeechRecognizer.ERROR_NO_MATCH -> "Nem ismertem fel a mondatot (error $error)."
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "HIBA: a Google beszédfelismerő foglalt (error $error)."
+            SpeechRecognizer.ERROR_SERVER -> "HIBA: a Google beszédfelismerő szerverhibát jelzett (error $error)."
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Nem hallottam beszédet (error $error)."
             else -> "Beszédfelismerési hiba: $error"
         }
         updateNotification(message)
         startListeningAgain()
     }
-    override fun onReadyForSpeech(params: Bundle?) { }
-    override fun onBeginningOfSpeech() { }
+    override fun onReadyForSpeech(params: Bundle?) {
+        updateNotification("Figyelek – mondd: GépJózsi.")
+    }
+
+    override fun onBeginningOfSpeech() {
+        updateNotification("Beszédet érzékelek…")
+    }
+
     override fun onRmsChanged(rmsdB: Float) { }
     override fun onBufferReceived(buffer: ByteArray?) { }
-    override fun onEndOfSpeech() { }
-    override fun onPartialResults(partialResults: Bundle?) { }
+
+    override fun onEndOfSpeech() {
+        updateNotification("Beszéd vége – feldolgozom…")
+    }
+
+    override fun onPartialResults(partialResults: Bundle?) {
+        val phrase = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+        if (!phrase.isNullOrBlank()) updateNotification("Ezt hallom: $phrase")
+    }
+
     override fun onEvent(eventType: Int, params: Bundle?) { }
 
     override fun onDestroy() {
