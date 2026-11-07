@@ -78,7 +78,7 @@ class MainActivity : Activity() {
         val intro = card()
         intro.addView(label("Szia! Itt GépJózsi.", 20f, white, true))
         addGap(intro, 8)
-        intro.addView(label("Mondd például: „GépJózsi, kapcsold fel a Kint lámpát!”", 15f, muted))
+        intro.addView(label("Mondd például: „Gép Józsi, Kint FEL” vagy „Gép Józsi, Kint LE”.", 15f, muted))
         root.addView(intro)
         addGap(root)
 
