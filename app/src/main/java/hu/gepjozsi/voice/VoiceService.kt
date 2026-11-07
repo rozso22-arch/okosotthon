@@ -72,7 +72,11 @@ class VoiceService : Service(), RecognitionListener {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hu-HU")
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hu-HU")
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1000L)
                 }
                 recognizer?.startListening(intent)
             } catch (_: Exception) { startListeningAgain() }
@@ -182,7 +186,10 @@ class VoiceService : Service(), RecognitionListener {
 
     override fun onPartialResults(partialResults: Bundle?) {
         val phrase = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-        if (!phrase.isNullOrBlank()) updateNotification("Ezt hallom: $phrase")
+        if (!phrase.isNullOrBlank()) {
+            updateNotification("Részben ezt hallom: $phrase")
+            processPhrase(phrase)
+        }
     }
 
     override fun onEvent(eventType: Int, params: Bundle?) { }
