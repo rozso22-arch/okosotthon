@@ -188,7 +188,6 @@ class VoiceService : Service(), RecognitionListener {
         val phrase = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
         if (!phrase.isNullOrBlank()) {
             updateNotification("Részben ezt hallom: $phrase")
-            processPhrase(phrase)
         }
     }
 
