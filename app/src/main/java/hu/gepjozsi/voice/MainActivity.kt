@@ -85,7 +85,7 @@ class MainActivity : Activity() {
         val statusCard = card()
         statusCard.addView(label("ÉLŐ ÁLLAPOT", 12f, cyan, true))
         addGap(statusCard, 8)
-        statusText = label(prefs.getString("voice_status", "A figyelés még nem indult el."), 17f, white, true)
+        statusText = label(prefs.getString("voice_status", "A figyelés még nem indult el.") ?: "A figyelés még nem indult el.", 17f, white, true)
         statusText.minHeight = dp(54)
         statusText.gravity = Gravity.CENTER_VERTICAL
         statusCard.addView(statusText)
