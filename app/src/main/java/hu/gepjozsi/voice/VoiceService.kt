@@ -94,9 +94,9 @@ class VoiceService : Service(), RecognitionListener {
     private fun processPhrase(phrase: String) {
         if (phrase.isBlank()) return
         val text = normalize(phrase)
-        val wake = text.indexOf("gepjozsi")
-        if (wake >= 0) {
-            val command = text.substring(wake + 8).trim()
+        val wakeMatch = Regex("gep\\s*jozsi").find(text)
+        if (wakeMatch != null) {
+            val command = text.substring(wakeMatch.range.last + 1).trim()
             if (command.isNotBlank() && sendCommand(command)) {
                 waitingForCommandUntil = 0L
                 updateNotification("Parancs elküldve. Újra figyelek.")
@@ -121,8 +121,13 @@ class VoiceService : Service(), RecognitionListener {
     }
 
     private fun sendCommand(text: String): Boolean {
-        val on = listOf("kapcsold fel", "kapcsold be", "kapcsolj fel", "kapcsolj be", "kapcsol fel", "kapcsol be", "kapcsolt fel", "kapcsolt be").any { text.contains(it) }
-        val off = listOf("kapcsold le", "kapcsold ki", "kapcsolj le", "kapcsolj ki", "kapcsol le", "kapcsol ki", "kapcsolt le", "kapcsolt ki").any { text.contains(it) }
+        // Rövid, természetes parancsok: „Gép Józsi, Kint fel” / „Gép Józsi, Kint le”.
+        val on = listOf("kint fel", "hatul fel", "bejarat fel", "szobak fel", "szoba fel",
+            "kapcsold fel", "kapcsold be", "kapcsolj fel", "kapcsolj be", "kapcsol fel", "kapcsol be",
+            "kapcsolt fel", "kapcsolt be").any { text.contains(it) }
+        val off = listOf("kint le", "hatul le", "bejarat le", "szobak le", "szoba le",
+            "kapcsold le", "kapcsold ki", "kapcsolj le", "kapcsolj ki", "kapcsol le", "kapcsol ki",
+            "kapcsolt le", "kapcsolt ki").any { text.contains(it) }
         if (!on && !off) return false
         val id = when {
             text.contains("kint") -> "1001542f3d"
