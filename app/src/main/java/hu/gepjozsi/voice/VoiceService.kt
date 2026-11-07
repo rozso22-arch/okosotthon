@@ -81,6 +81,7 @@ class VoiceService : Service(), RecognitionListener {
 
     override fun onResults(results: Bundle?) {
         val phrase = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+        if (phrase.isNotBlank()) updateNotification("Felismert szöveg: $phrase")
         processPhrase(phrase)
         startListeningAgain()
     }
@@ -115,8 +116,8 @@ class VoiceService : Service(), RecognitionListener {
     }
 
     private fun sendCommand(text: String): Boolean {
-        val on = listOf("kapcsold fel", "kapcsold be", "kapcsolj fel", "kapcsolj be").any { text.contains(it) }
-        val off = listOf("kapcsold le", "kapcsold ki", "kapcsolj le", "kapcsolj ki").any { text.contains(it) }
+        val on = listOf("kapcsold fel", "kapcsold be", "kapcsolj fel", "kapcsolj be", "kapcsol fel", "kapcsol be", "kapcsolt fel", "kapcsolt be").any { text.contains(it) }
+        val off = listOf("kapcsold le", "kapcsold ki", "kapcsolj le", "kapcsolj ki", "kapcsol le", "kapcsol ki", "kapcsolt le", "kapcsolt ki").any { text.contains(it) }
         if (!on && !off) return false
         val id = when {
             text.contains("kint") -> "1001542f3d"
@@ -148,7 +149,19 @@ class VoiceService : Service(), RecognitionListener {
         return true
     }
 
-    override fun onError(error: Int) { startListeningAgain() }
+    override fun onError(error: Int) {
+        val message = when (error) {
+            SpeechRecognizer.ERROR_NO_MATCH -> "Nem értettem a beszédet. Újra figyelek."
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Nem hallottam beszédet. Újra figyelek."
+            SpeechRecognizer.ERROR_AUDIO -> "Mikrofonhiba."
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Nincs mikrofonengedély."
+            SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Beszédfelismerési hálózati hiba."
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "A beszédfelismerő foglalt."
+            else -> "Beszédfelismerési hiba: $error"
+        }
+        updateNotification(message)
+        startListeningAgain()
+    }
     override fun onReadyForSpeech(params: Bundle?) { }
     override fun onBeginningOfSpeech() { }
     override fun onRmsChanged(rmsdB: Float) { }
