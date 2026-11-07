@@ -28,6 +28,14 @@ class VoiceService : Service(), RecognitionListener {
     private var waitingForCommandUntil = 0L
     private var restarting = false
     private var toneGenerator: ToneGenerator? = null
+    private var restartDelayMs = 300L
+    private val commandTimeout = Runnable {
+        if (waitingForCommandUntil != 0L &&
+            android.os.SystemClock.elapsedRealtime() >= waitingForCommandUntil) {
+            waitingForCommandUntil = 0L
+            updateNotification("Lejárt az idő. Újra Gép Józsira figyelek.")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -73,6 +81,7 @@ class VoiceService : Service(), RecognitionListener {
         handler.postDelayed({
             restarting = false
             try {
+                val commandMode = waitingForCommandUntil > android.os.SystemClock.elapsedRealtime()
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hu-HU")
@@ -80,13 +89,18 @@ class VoiceService : Service(), RecognitionListener {
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4500L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
+                    // Wake-word fázisban gyorsan zárja le a rövid „Gép Józsi” mondatot;
+                    // parancs-fázisban több időt adunk a „Kint FEL/LE” kimondására.
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 4000L else 2200L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 2800L else 1600L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 700L)
                 }
                 recognizer?.startListening(intent)
-            } catch (_: Exception) { startListeningAgain() }
-        }, 700)
+            } catch (_: Exception) {
+                restarting = false
+                handler.postDelayed({ startListeningAgain() }, 1000L)
+            }
+        }, restartDelayMs)
     }
 
     override fun onResults(results: Bundle?) {
@@ -102,28 +116,34 @@ class VoiceService : Service(), RecognitionListener {
         val now = android.os.SystemClock.elapsedRealtime()
         val wakeMatch = Regex("gep\\s*jozsi").find(text)
 
-        // Ébresztőszó-fázis: csak a „Gép Józsi” kifejezést várjuk.
+        // 1. fázis: kizárólag az ébresztőszót várjuk.
         if (waitingForCommandUntil <= now) {
             if (wakeMatch != null) {
                 val command = text.substring(wakeMatch.range.last + 1).trim()
                 if (command.isNotBlank() && sendCommand(command)) {
                     waitingForCommandUntil = 0L
-                    updateNotification("Parancs elküldve. Újra figyelek.")
+                    handler.removeCallbacks(commandTimeout)
+                    updateNotification("Parancs elküldve. Újra Gép Józsira figyelek.")
                 } else {
                     waitingForCommandUntil = now + 15000L
+                    handler.removeCallbacks(commandTimeout)
+                    handler.postDelayed(commandTimeout, 15000L)
                     toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
                     updateNotification("Ébresztőszó érzékelve! Most mondd: Kint FEL vagy Kint LE.")
                 }
+            } else {
+                updateNotification("Ébresztőszóra várok: Gép Józsi.")
             }
             return
         }
 
-        // Parancs-fázis: a pittyenés után már nem kérjük újra az ébresztőszót.
+        // 2. fázis: a pittyenés után már csak a kapcsolási parancsot várjuk.
         if (sendCommand(text)) {
             waitingForCommandUntil = 0L
-            updateNotification("Parancs elküldve. Újra figyelek Gép Józsira.")
+            handler.removeCallbacks(commandTimeout)
+            updateNotification("Parancs elküldve. Újra Gép Józsira figyelek.")
         } else {
-            updateNotification("Nem értettem a parancsot. Mondd: Kint FEL vagy Kint LE.")
+            updateNotification("Nem értettem: „$phrase”. Mondd: Kint FEL vagy Kint LE.")
         }
     }
 
@@ -174,14 +194,20 @@ class VoiceService : Service(), RecognitionListener {
 
     override fun onError(error: Int) {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (waitingForCommandUntil > now &&
-            (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
-            updateNotification("A parancsra várok: Kint FEL vagy Kint LE.")
+        // A csend/no-match a wake-word fázisban normális: ne jelenítsünk meg
+        // hibát, csak indítsuk újra a következő rövid felismerési ablakot.
+        if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+            if (waitingForCommandUntil > now) {
+                updateNotification("Parancsra várok: Kint FEL vagy Kint LE.")
+            } else {
+                updateNotification("Ébresztőszóra várok: Gép Józsi.")
+            }
             startListeningAgain()
             return
         }
         if (waitingForCommandUntil != 0L && waitingForCommandUntil <= now) {
             waitingForCommandUntil = 0L
+            handler.removeCallbacks(commandTimeout)
             updateNotification("Lejárt az idő. Újra Gép Józsira figyelek.")
             startListeningAgain()
             return
@@ -199,7 +225,17 @@ class VoiceService : Service(), RecognitionListener {
             else -> "Beszédfelismerési hiba: $error"
         }
         updateNotification(message)
-        startListeningAgain()
+        // Súlyos kliens-/foglaltsági hibánál új példányt készítünk, hogy ne ragadjon
+        // hibás állapotban a SpeechRecognizer.
+        if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+            handler.postDelayed({
+                try { recognizer?.destroy() } catch (_: Exception) { }
+                recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
+                startListeningAgain()
+            }, 900L)
+        } else {
+            startListeningAgain()
+        }
     }
     override fun onReadyForSpeech(params: Bundle?) {
         if (waitingForCommandUntil > android.os.SystemClock.elapsedRealtime()) {
@@ -231,6 +267,7 @@ class VoiceService : Service(), RecognitionListener {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        waitingForCommandUntil = 0L
         try { recognizer?.cancel(); recognizer?.destroy() } catch (_: Exception) { }
         recognizer = null
         try { toneGenerator?.release() } catch (_: Exception) { }
