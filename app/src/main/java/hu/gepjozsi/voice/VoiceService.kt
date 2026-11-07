@@ -58,6 +58,7 @@ class VoiceService : Service(), RecognitionListener {
     }
 
     private fun updateNotification(message: String) {
+        getSharedPreferences("gepjozsi", MODE_PRIVATE).edit().putString("voice_status", message).apply()
         getSystemService(NotificationManager::class.java).notify(7, makeNotification(message))
     }
 
