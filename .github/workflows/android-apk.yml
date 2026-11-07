@@ -1,0 +1,29 @@
+name: Build GepJozsi APK
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app/**'
+      - '*.gradle.kts'
+      - 'settings.gradle.kts'
+      - '.github/workflows/android-apk.yml'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build debug APK
+        run: gradle assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GepJozsi-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
