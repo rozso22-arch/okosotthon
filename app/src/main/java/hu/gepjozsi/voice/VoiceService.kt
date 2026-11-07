@@ -29,7 +29,7 @@ class VoiceService : Service(), RecognitionListener {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(7, makeNotification("Ébresztőszó: GépJózsi"))
+        startForeground(7, makeNotification("Ébresztőszó: Gép Józsi – „Kint fel/le”"))
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             updateNotification("Nem található Android beszédfelismerő.")
             stopSelf()
@@ -75,9 +75,9 @@ class VoiceService : Service(), RecognitionListener {
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1000L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4500L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
                 }
                 recognizer?.startListening(intent)
             } catch (_: Exception) { startListeningAgain() }
@@ -101,7 +101,7 @@ class VoiceService : Service(), RecognitionListener {
                 waitingForCommandUntil = 0L
                 updateNotification("Parancs elküldve. Újra figyelek.")
             } else {
-                waitingForCommandUntil = android.os.SystemClock.elapsedRealtime() + 10000L
+                waitingForCommandUntil = android.os.SystemClock.elapsedRealtime() + 20000L
                 updateNotification("Hallak! Mondd a kapcsolási parancsot.")
             }
             return
