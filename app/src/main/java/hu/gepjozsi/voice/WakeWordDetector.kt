@@ -41,6 +41,7 @@ class WakeWordDetector(
 
     @Volatile private var running = false
     @Volatile private var paused = false
+    @Volatile private var resetAudioWindow = false
     private var worker: Thread? = null
     private var recorder: AudioRecord? = null
     private var yamnet: Interpreter? = null
@@ -82,14 +83,42 @@ class WakeWordDetector(
         try { recorder?.stop() } catch (_: Exception) { }
     }
 
+    @Synchronized
     fun resume() {
         if (!running) return
         try {
+            // A SpeechRecognizer után ne a régi AudioRecord példányt használjuk:
+            // teljesen elengedjük, majd friss mikrofonpéldányt nyitunk.
+            paused = true
+            val oldRecorder = recorder
+            recorder = null
+            try { oldRecorder?.stop() } catch (_: Exception) { }
+            try { oldRecorder?.release() } catch (_: Exception) { }
+
+            val minBuffer = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            )
+            require(minBuffer > 0) { "A mikrofon nem támogatja a 16 kHz-es PCM hangot." }
+            val freshRecorder = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                max(minBuffer, 8192)
+            )
+            require(freshRecorder.state == AudioRecord.STATE_INITIALIZED) {
+                "Nem sikerült újra megnyitni a mikrofont."
+            }
+            recorder = freshRecorder
+            freshRecorder.startRecording()
+            resetAudioWindow = true
             paused = false
-            recorder?.startRecording()
             onStatus("Újra GépJózsi ébresztőszóra figyelek.")
+            Log.i(TAG, "A mikrofon új AudioRecord példánnyal újraindult.")
         } catch (e: Exception) {
+            paused = true
             onStatus("Nem sikerült újraindítani a mikrofont: ${e.message}")
+            Log.e(TAG, "Microphone restart failed", e)
         }
     }
 
@@ -149,11 +178,23 @@ class WakeWordDetector(
         var writeIndex = 0
         var sinceInference = 0
         var lastWakeAt = 0L
+        var wasPaused = false
 
         while (running) {
             if (paused) {
+                wasPaused = true
                 Thread.sleep(50)
                 continue
+            }
+            if (wasPaused || resetAudioWindow) {
+                // Az új mikrofonból új, teljes 1,5 másodperces ablakot gyűjtünk.
+                window.fill(0f)
+                filled = 0
+                writeIndex = 0
+                sinceInference = 0
+                lastWakeAt = SystemClock.elapsedRealtime()
+                wasPaused = false
+                resetAudioWindow = false
             }
             val count = try { recorder?.read(shortBuffer, 0, shortBuffer.size) ?: -1 }
                 catch (e: Exception) { -1 }
