@@ -179,7 +179,7 @@ class WakeWordDetector(
         var writeIndex = 0
         var sinceInference = 0
         var lastWakeAt = 0L
-        var positiveStreak = 0
+        val recentDetections = ArrayDeque<Boolean>()
         var wasPaused = false
 
         while (running) {
@@ -194,7 +194,7 @@ class WakeWordDetector(
                 filled = 0
                 writeIndex = 0
                 sinceInference = 0
-                positiveStreak = 0
+                recentDetections.clear()
                 lastWakeAt = SystemClock.elapsedRealtime()
                 wasPaused = false
                 resetAudioWindow = false
@@ -221,17 +221,15 @@ class WakeWordDetector(
                             System.arraycopy(window, writeIndex, orderedWindow, 0, firstPart)
                             if (writeIndex > 0) System.arraycopy(window, 0, orderedWindow, firstPart, writeIndex)
                             val score = classify(orderedWindow)
-                            if (score >= THRESHOLD) {
-                                positiveStreak++
-                                Log.d(TAG, "Pozitív ébresztőszó-ablak: $positiveStreak/$REQUIRED_POSITIVE_WINDOWS")
-                                if (positiveStreak >= REQUIRED_POSITIVE_WINDOWS) {
-                                    positiveStreak = 0
-                                    lastWakeAt = SystemClock.elapsedRealtime()
-                                    Log.i(TAG, "GépJózsi felismerés megerősítve: $score")
-                                    onWakeWord(score)
-                                }
-                            } else {
-                                positiveStreak = 0
+                            recentDetections.addLast(score >= THRESHOLD)
+                            if (recentDetections.size > 3) recentDetections.removeFirst()
+                            val positiveCount = recentDetections.count { it }
+                            Log.d(TAG, "Pozitív ébresztőszó-ablak: $positiveCount/${recentDetections.size}")
+                            if (recentDetections.size == 3 && positiveCount >= 2) {
+                                recentDetections.clear()
+                                lastWakeAt = SystemClock.elapsedRealtime()
+                                Log.i(TAG, "GépJózsi felismerés megerősítve: $score")
+                                onWakeWord(score)
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Inference failed", e)
