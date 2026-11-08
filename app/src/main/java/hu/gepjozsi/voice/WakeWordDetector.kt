@@ -10,6 +10,7 @@ import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import ai.onnxruntime.TensorInfo
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -124,7 +125,9 @@ class WakeWordDetector(
             svmInputName = svm!!.inputNames.firstOrNull()
                 ?: error("Az ONNX modellnek nincs bemenete.")
             val inputInfo = svm!!.inputInfo[svmInputName] ?: error("Nem olvasható az ONNX bemenet.")
-            val shape = inputInfo.info.shape
+            val tensorInfo = inputInfo.info as? TensorInfo
+                ?: error("Az SVM bemenete nem tenzor.")
+            val shape = tensorInfo.shape
             require(shape.size == 2 && (shape[1] == 2048L || shape[1] == -1L)) {
                 "Az SVM bemeneti alakja nem 2048: ${shape.contentToString()}"
             }
@@ -203,7 +206,7 @@ class WakeWordDetector(
         require(embeddingOutputIndex >= 0) { "A YAMNet 1024 elemű embedding kimenete nem található." }
         interpreter.runForMultipleInputsOutputs(arrayOf(input), outputObjects)
 
-        val embeddings = flattenFloats(outputObjects[embeddingOutputIndex])
+        val embeddings = flattenFloats(outputObjects[embeddingOutputIndex] as Any)
         require(embeddings.isNotEmpty() && embeddings.size % 1024 == 0) {
             "Érvénytelen YAMNet embedding méret: ${embeddings.size}"
         }
