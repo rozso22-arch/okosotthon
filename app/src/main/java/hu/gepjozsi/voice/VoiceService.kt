@@ -15,6 +15,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
@@ -25,31 +26,35 @@ import org.json.JSONObject
 class VoiceService : Service(), RecognitionListener {
     private val handler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
-    private var waitingForCommandUntil = 0L
+    private var detector: WakeWordDetector? = null
+    @Volatile private var waitingForCommandUntil = 0L
+    @Volatile private var commandMode = false
     private var restarting = false
     private var toneGenerator: ToneGenerator? = null
-    private var restartDelayMs = 300L
+
     private val commandTimeout = Runnable {
-        if (waitingForCommandUntil != 0L &&
-            android.os.SystemClock.elapsedRealtime() >= waitingForCommandUntil) {
-            waitingForCommandUntil = 0L
-            updateNotification("Lejárt az idő. Újra Gép Józsira figyelek.")
+        if (commandMode && android.os.SystemClock.elapsedRealtime() >= waitingForCommandUntil) {
+            finishCommandMode("Lejárt az idő. Újra Gép Józsira figyelek.")
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(7, makeNotification("Ébresztőszó: Gép Józsi – „Kint fel/le”"))
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            updateNotification("Nem található Android beszédfelismerő.")
-            stopSelf()
-            return
-        }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
+        startForeground(7, makeNotification("Saját GépJózsi-felismerő indítása…"))
         toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-        updateNotification("Ébresztőszóra várok: Gép Józsi.")
-        startListeningAgain()
+        try {
+            detector = WakeWordDetector(
+                applicationContext,
+                onWakeWord = { score -> handler.post { beginCommandMode(score) } },
+                onStatus = { message -> handler.post { if (!commandMode) updateNotification(message) } }
+            )
+            detector?.start()
+        } catch (e: Exception) {
+            Log.e("GepJozsi", "Wake detector init failed", e)
+            updateNotification("Nem sikerült elindítani a saját ébresztőszó-felismerőt: ${e.message}")
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -75,13 +80,33 @@ class VoiceService : Service(), RecognitionListener {
         getSystemService(NotificationManager::class.java).notify(7, makeNotification(message))
     }
 
-    private fun startListeningAgain() {
-        if (restarting || recognizer == null) return
+    private fun beginCommandMode(score: Float) {
+        if (commandMode) return
+        commandMode = true
+        waitingForCommandUntil = android.os.SystemClock.elapsedRealtime() + 15000L
+        detector?.pauseForCommand()
+        toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+        updateNotification("Gép Józsi felismerve (SVM: ${"%.3f".format(Locale.US, score)}). Mondd: Kint FEL vagy Kint LE.")
+        handler.removeCallbacks(commandTimeout)
+        handler.postDelayed(commandTimeout, 15000L)
+
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            finishCommandMode("Nincs elérhető beszédfelismerő a kapcsolási parancshoz.")
+            return
+        }
+        if (recognizer == null) {
+            recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
+        }
+        startCommandListening()
+    }
+
+    private fun startCommandListening() {
+        if (!commandMode || restarting || recognizer == null) return
         restarting = true
         handler.postDelayed({
             restarting = false
+            if (!commandMode) return@postDelayed
             try {
-                val commandMode = waitingForCommandUntil > android.os.SystemClock.elapsedRealtime()
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hu-HU")
@@ -89,61 +114,61 @@ class VoiceService : Service(), RecognitionListener {
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-                    // Wake-word fázisban gyorsan zárja le a rövid „Gép Józsi” mondatot;
-                    // parancs-fázisban több időt adunk a „Kint FEL/LE” kimondására.
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 4000L else 2200L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 2800L else 1600L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3500L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
                     putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 700L)
                 }
                 recognizer?.startListening(intent)
-            } catch (_: Exception) {
-                restarting = false
-                handler.postDelayed({ startListeningAgain() }, 1000L)
+            } catch (e: Exception) {
+                Log.e("GepJozsi", "Command recognition start failed", e)
+                handler.postDelayed({ startCommandListening() }, 700L)
             }
-        }, restartDelayMs)
+        }, 250L)
+    }
+
+    private fun finishCommandMode(message: String) {
+        if (!commandMode) return
+        commandMode = false
+        waitingForCommandUntil = 0L
+        restarting = false
+        handler.removeCallbacks(commandTimeout)
+
+        // A SpeechRecognizer.cancel() aszinkron; előbb teljesen elengedjük
+        // és megsemmisítjük, csak utána kérjük vissza a mikrofont.
+        val oldRecognizer = recognizer
+        recognizer = null
+        try { oldRecognizer?.cancel() } catch (e: Exception) {
+            Log.w("GepJozsi", "Recognizer cancel failed", e)
+        }
+        try { oldRecognizer?.destroy() } catch (e: Exception) {
+            Log.w("GepJozsi", "Recognizer destroy failed", e)
+        }
+
+        updateNotification("$message Mikrofon újraindítása…")
+        handler.postDelayed({
+            if (!commandMode) {
+                try {
+                    detector?.resume()
+                } catch (e: Exception) {
+                    Log.e("GepJozsi", "Wake detector resume failed", e)
+                    updateNotification("Nem sikerült újraindítani a GépJózsi-figyelést: ${e.message}")
+                }
+            }
+        }, 800L)
     }
 
     override fun onResults(results: Bundle?) {
+        if (!commandMode) return
         val phrase = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-        if (phrase.isNotBlank()) updateNotification("Felismert szöveg: $phrase")
-        processPhrase(phrase)
-        startListeningAgain()
-    }
-
-    private fun processPhrase(phrase: String) {
-        if (phrase.isBlank()) return
-        val text = normalize(phrase)
-        val now = android.os.SystemClock.elapsedRealtime()
-        val wakeMatch = Regex("gep\\s*jozsi").find(text)
-
-        // 1. fázis: kizárólag az ébresztőszót várjuk.
-        if (waitingForCommandUntil <= now) {
-            if (wakeMatch != null) {
-                val command = text.substring(wakeMatch.range.last + 1).trim()
-                if (command.isNotBlank() && sendCommand(command)) {
-                    waitingForCommandUntil = 0L
-                    handler.removeCallbacks(commandTimeout)
-                    updateNotification("Parancs elküldve. Újra Gép Józsira figyelek.")
-                } else {
-                    waitingForCommandUntil = now + 15000L
-                    handler.removeCallbacks(commandTimeout)
-                    handler.postDelayed(commandTimeout, 15000L)
-                    toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
-                    updateNotification("Ébresztőszó érzékelve! Most mondd: Kint FEL vagy Kint LE.")
-                }
-            } else {
-                updateNotification("Ébresztőszóra várok: Gép Józsi.")
-            }
-            return
-        }
-
-        // 2. fázis: a pittyenés után már csak a kapcsolási parancsot várjuk.
-        if (sendCommand(text)) {
-            waitingForCommandUntil = 0L
-            handler.removeCallbacks(commandTimeout)
-            updateNotification("Parancs elküldve. Újra Gép Józsira figyelek.")
-        } else {
+        if (phrase.isNotBlank()) updateNotification("Parancs: $phrase")
+        val normalized = normalize(phrase)
+        if (sendCommand(normalized)) {
+            finishCommandMode("A parancs elküldve. Újra Gép Józsira figyelek.")
+        } else if (android.os.SystemClock.elapsedRealtime() < waitingForCommandUntil) {
             updateNotification("Nem értettem: „$phrase”. Mondd: Kint FEL vagy Kint LE.")
+            startCommandListening()
+        } else {
+            finishCommandMode("Lejárt az idő. Újra Gép Józsira figyelek.")
         }
     }
 
@@ -154,7 +179,6 @@ class VoiceService : Service(), RecognitionListener {
     }
 
     private fun sendCommand(text: String): Boolean {
-        // Rövid, természetes parancsok: „Gép Józsi, Kint fel” / „Gép Józsi, Kint le”.
         val on = listOf("kint fel", "hatul fel", "bejarat fel", "szobak fel", "szoba fel",
             "kapcsold fel", "kapcsold be", "kapcsolj fel", "kapcsolj be", "kapcsol fel", "kapcsol be",
             "kapcsolt fel", "kapcsolt be").any { text.contains(it) }
@@ -170,8 +194,11 @@ class VoiceService : Service(), RecognitionListener {
             else -> return false
         }
         val key = getSharedPreferences("gepjozsi", MODE_PRIVATE).getString("api_key", "").orEmpty()
-        if (key.isBlank()) return false
-        thread {
+        if (key.isBlank()) {
+            handler.post { updateNotification("Hiányzik a vezérlési kulcs. Mentsd el az alkalmazásban.") }
+            return false
+        }
+        thread(name = "GepJozsiCommand") {
             var connection: HttpURLConnection? = null
             try {
                 connection = URL("https://okosotthon-api.rozso22.workers.dev/control").openConnection() as HttpURLConnection
@@ -183,93 +210,64 @@ class VoiceService : Service(), RecognitionListener {
                 connection.setRequestProperty("X-Api-Key", key)
                 val body = JSONObject().put("id", id).put("switch", if (on) "on" else "off").toString()
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                val code = connection.responseCode
-                handler.post { updateNotification(if (code in 200..299) "Kapcsolási parancs elküldve." else "A kapcsolás hibát jelzett: HTTP $code") }
-            } catch (_: Exception) {
-                handler.post { updateNotification("Nem sikerült elérni az OkosOtthon szervert.") }
-            } finally { connection?.disconnect() }
+                val responseCode = connection.responseCode
+                handler.post {
+                    updateNotification(if (responseCode in 200..299) "Kapcsolási parancs sikeresen elküldve." else "A kapcsolás hibát jelzett: HTTP $responseCode")
+                }
+            } catch (e: Exception) {
+                handler.post { updateNotification("Nem sikerült elérni az OkosOtthon szervert: ${e.message}") }
+            } finally {
+                connection?.disconnect()
+            }
         }
         return true
     }
 
     override fun onError(error: Int) {
-        val now = android.os.SystemClock.elapsedRealtime()
-        // A csend/no-match a wake-word fázisban normális: ne jelenítsünk meg
-        // hibát, csak indítsuk újra a következő rövid felismerési ablakot.
+        if (!commandMode) return
         if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-            if (waitingForCommandUntil > now) {
+            if (android.os.SystemClock.elapsedRealtime() < waitingForCommandUntil) {
                 updateNotification("Parancsra várok: Kint FEL vagy Kint LE.")
+                startCommandListening()
             } else {
-                updateNotification("Ébresztőszóra várok: Gép Józsi.")
+                finishCommandMode("Lejárt az idő. Újra Gép Józsira figyelek.")
             }
-            startListeningAgain()
-            return
-        }
-        if (waitingForCommandUntil != 0L && waitingForCommandUntil <= now) {
-            waitingForCommandUntil = 0L
-            handler.removeCallbacks(commandTimeout)
-            updateNotification("Lejárt az idő. Újra Gép Józsira figyelek.")
-            startListeningAgain()
             return
         }
         val message = when (error) {
-            SpeechRecognizer.ERROR_AUDIO -> "HIBA: a beszédfelismerő mikrofonhibát jelzett (error $error)."
-            SpeechRecognizer.ERROR_CLIENT -> "HIBA: a beszédfelismerő kliens leállt (error $error)."
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "HIBA: nincs mikrofonengedély (error $error)."
-            SpeechRecognizer.ERROR_NETWORK -> "HIBA: hálózati beszédfelismerési hiba (error $error)."
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "HIBA: időtúllépés a beszédfelismerésnél (error $error)."
-            SpeechRecognizer.ERROR_NO_MATCH -> "Nem ismertem fel a mondatot (error $error)."
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "HIBA: a Google beszédfelismerő foglalt (error $error)."
-            SpeechRecognizer.ERROR_SERVER -> "HIBA: a Google beszédfelismerő szerverhibát jelzett (error $error)."
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Nem hallottam beszédet (error $error)."
+            SpeechRecognizer.ERROR_AUDIO -> "Mikrofonhiba a parancs felismerésekor."
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Nincs mikrofonengedély."
+            SpeechRecognizer.ERROR_NETWORK -> "Hálózati hiba a parancs felismerésekor."
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "A beszédfelismerő foglalt, újrapróbálom."
+            SpeechRecognizer.ERROR_SERVER -> "A beszédfelismerő szerverhibát jelzett."
             else -> "Beszédfelismerési hiba: $error"
         }
         updateNotification(message)
-        // Súlyos kliens-/foglaltsági hibánál új példányt készítünk, hogy ne ragadjon
-        // hibás állapotban a SpeechRecognizer.
-        if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
-            handler.postDelayed({
-                try { recognizer?.destroy() } catch (_: Exception) { }
-                recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
-                startListeningAgain()
-            }, 900L)
+        if (android.os.SystemClock.elapsedRealtime() < waitingForCommandUntil) {
+            handler.postDelayed({ startCommandListening() }, 700L)
         } else {
-            startListeningAgain()
+            finishCommandMode("Lejárt az idő. Újra Gép Józsira figyelek.")
         }
     }
+
     override fun onReadyForSpeech(params: Bundle?) {
-        if (waitingForCommandUntil > android.os.SystemClock.elapsedRealtime()) {
-            updateNotification("Parancsra várok: Kint FEL vagy Kint LE.")
-        } else {
-            updateNotification("Ébresztőszóra várok: Gép Józsi.")
-        }
+        if (commandMode) updateNotification("Hallgatlak: Kint FEL vagy Kint LE.")
     }
-
-    override fun onBeginningOfSpeech() {
-        updateNotification("Beszédet érzékelek…")
-    }
-
+    override fun onBeginningOfSpeech() { if (commandMode) updateNotification("A parancsot hallom…") }
     override fun onRmsChanged(rmsdB: Float) { }
     override fun onBufferReceived(buffer: ByteArray?) { }
-
-    override fun onEndOfSpeech() {
-        updateNotification("Beszéd vége – feldolgozom…")
-    }
-
-    override fun onPartialResults(partialResults: Bundle?) {
-        val phrase = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-        if (!phrase.isNullOrBlank()) {
-            updateNotification("Részben ezt hallom: $phrase")
-        }
-    }
-
+    override fun onEndOfSpeech() { if (commandMode) updateNotification("Feldolgozom a parancsot…") }
+    override fun onPartialResults(partialResults: Bundle?) { }
     override fun onEvent(eventType: Int, params: Bundle?) { }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        commandMode = false
         waitingForCommandUntil = 0L
         try { recognizer?.cancel(); recognizer?.destroy() } catch (_: Exception) { }
         recognizer = null
+        try { detector?.stop() } catch (_: Exception) { }
+        detector = null
         try { toneGenerator?.release() } catch (_: Exception) { }
         toneGenerator = null
         super.onDestroy()
