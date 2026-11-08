@@ -234,8 +234,11 @@ class WakeWordDetector(
                 // skl2onnx SVC export: az első kimenet a 0/1 osztálycímke.
                 val labelOutput = result.firstOrNull { it.value is OnnxTensor }
                     ?: error("Az SVM nem adott tenzor kimenetet.")
-                val values = flattenNumbers(labelOutput.value)
-                require(values.isNotEmpty()) { "Üres SVM kimenet." }
+                val labelTensor = labelOutput.value as OnnxTensor
+                val rawLabel = labelTensor.value
+                Log.d(TAG, "SVM output name=${labelOutput.key}, tensorType=${labelTensor.info.type}, rawType=${rawLabel?.javaClass?.name}, rawValue=${rawLabel}")
+                val values = flattenNumbers(rawLabel)
+                require(values.isNotEmpty()) { "Üres SVM kimenet. ONNX output=${labelOutput.key}, típus=${rawLabel?.javaClass?.name}" }
                 val first = values.first()
                 // A modell kimenete címke (0/1); a notebookban használt 0
                 // döntési küszöbnek megfelelő pozitív osztály: 1.
