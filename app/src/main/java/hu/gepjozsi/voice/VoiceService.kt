@@ -127,12 +127,34 @@ class VoiceService : Service(), RecognitionListener {
     }
 
     private fun finishCommandMode(message: String) {
+        if (!commandMode) return
         commandMode = false
         waitingForCommandUntil = 0L
+        restarting = false
         handler.removeCallbacks(commandTimeout)
-        try { recognizer?.cancel() } catch (_: Exception) { }
-        detector?.resume()
-        updateNotification(message)
+
+        // A SpeechRecognizer.cancel() aszinkron; előbb teljesen elengedjük
+        // és megsemmisítjük, csak utána kérjük vissza a mikrofont.
+        val oldRecognizer = recognizer
+        recognizer = null
+        try { oldRecognizer?.cancel() } catch (e: Exception) {
+            Log.w("GepJozsi", "Recognizer cancel failed", e)
+        }
+        try { oldRecognizer?.destroy() } catch (e: Exception) {
+            Log.w("GepJozsi", "Recognizer destroy failed", e)
+        }
+
+        updateNotification("$message Mikrofon újraindítása…")
+        handler.postDelayed({
+            if (!commandMode) {
+                try {
+                    detector?.resume()
+                } catch (e: Exception) {
+                    Log.e("GepJozsi", "Wake detector resume failed", e)
+                    updateNotification("Nem sikerült újraindítani a GépJózsi-figyelést: ${e.message}")
+                }
+            }
+        }, 800L)
     }
 
     override fun onResults(results: Bundle?) {
