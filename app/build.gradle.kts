@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "hu.gepjozsi.voice"
     compileSdk = 35
+    androidResources { noCompress += "tflite" }
     defaultConfig {
         applicationId = "hu.gepjozsi.voice"
         minSdk = 26
