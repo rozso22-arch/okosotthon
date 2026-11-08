@@ -37,6 +37,7 @@ class WakeWordDetector(
         private const val WINDOW_SAMPLES = 24000
         private const val HOP_SAMPLES = 4000 // 250 ms
         private const val THRESHOLD = 0.0f
+        private const val REQUIRED_POSITIVE_WINDOWS = 3
     }
 
     @Volatile private var running = false
@@ -178,6 +179,7 @@ class WakeWordDetector(
         var writeIndex = 0
         var sinceInference = 0
         var lastWakeAt = 0L
+        var positiveStreak = 0
         var wasPaused = false
 
         while (running) {
@@ -192,6 +194,7 @@ class WakeWordDetector(
                 filled = 0
                 writeIndex = 0
                 sinceInference = 0
+                positiveStreak = 0
                 lastWakeAt = SystemClock.elapsedRealtime()
                 wasPaused = false
                 resetAudioWindow = false
@@ -219,8 +222,16 @@ class WakeWordDetector(
                             if (writeIndex > 0) System.arraycopy(window, 0, orderedWindow, firstPart, writeIndex)
                             val score = classify(orderedWindow)
                             if (score >= THRESHOLD) {
-                                lastWakeAt = SystemClock.elapsedRealtime()
-                                onWakeWord(score)
+                                positiveStreak++
+                                Log.d(TAG, "Pozitív ébresztőszó-ablak: $positiveStreak/$REQUIRED_POSITIVE_WINDOWS")
+                                if (positiveStreak >= REQUIRED_POSITIVE_WINDOWS) {
+                                    positiveStreak = 0
+                                    lastWakeAt = SystemClock.elapsedRealtime()
+                                    Log.i(TAG, "GépJózsi felismerés megerősítve: $score")
+                                    onWakeWord(score)
+                                }
+                            } else {
+                                positiveStreak = 0
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Inference failed", e)
