@@ -143,6 +143,7 @@ class WakeWordDetector(
         val shortBuffer = ShortArray(2048)
         val window = FloatArray(WINDOW_SAMPLES)
         var filled = 0
+        var writeIndex = 0
         var sinceInference = 0
         var lastWakeAt = 0L
 
@@ -160,18 +161,19 @@ class WakeWordDetector(
             }
             for (i in 0 until count) {
                 val sample = shortBuffer[i] / 32768.0f
-                if (filled < WINDOW_SAMPLES) {
-                    window[filled++] = sample
-                } else {
-                    System.arraycopy(window, 1, window, 0, WINDOW_SAMPLES - 1)
-                    window[WINDOW_SAMPLES - 1] = sample
-                }
+                window[writeIndex] = sample
+                writeIndex = (writeIndex + 1) % WINDOW_SAMPLES
+                if (filled < WINDOW_SAMPLES) filled++
                 sinceInference++
                 if (filled == WINDOW_SAMPLES && sinceInference >= HOP_SAMPLES) {
                     sinceInference = 0
                     if (SystemClock.elapsedRealtime() - lastWakeAt > 2500L) {
                         try {
-                            val score = classify(window)
+                            val orderedWindow = FloatArray(WINDOW_SAMPLES)
+                            val firstPart = WINDOW_SAMPLES - writeIndex
+                            System.arraycopy(window, writeIndex, orderedWindow, 0, firstPart)
+                            if (writeIndex > 0) System.arraycopy(window, 0, orderedWindow, firstPart, writeIndex)
+                            val score = classify(orderedWindow)
                             if (score >= THRESHOLD) {
                                 lastWakeAt = SystemClock.elapsedRealtime()
                                 onWakeWord(score)
@@ -243,11 +245,12 @@ class WakeWordDetector(
         require(shape.isNotEmpty() && shape.all { it > 0 }) {
             "A YAMNet kimeneti alakja nem áll rendelkezésre: ${shape.contentToString()}"
         }
-        fun build(depth: Int): Any {
-            if (depth == shape.lastIndex) return FloatArray(shape[depth])
-            return Array(shape[depth]) { build(depth + 1) }
+        return when (shape.size) {
+            1 -> FloatArray(shape[0])
+            2 -> Array(shape[0]) { FloatArray(shape[1]) }
+            3 -> Array(shape[0]) { Array(shape[1]) { FloatArray(shape[2]) } }
+            else -> error("Nem támogatott YAMNet kimeneti dimenzió: ${shape.contentToString()}")
         }
-        return build(0)
     }
 
     private fun flattenFloats(value: Any): FloatArray {
