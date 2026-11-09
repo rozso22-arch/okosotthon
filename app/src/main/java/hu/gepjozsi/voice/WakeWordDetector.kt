@@ -43,6 +43,8 @@ class WakeWordDetector(
     @Volatile private var running = false
     @Volatile private var paused = false
     @Volatile private var resetAudioWindow = false
+    // Egy ébresztésből csak egy callback indulhat, amíg a parancsfigyelés tart.
+    @Volatile private var wakeTriggered = false
     private var worker: Thread? = null
     private var recorder: AudioRecord? = null
     private var yamnet: Interpreter? = null
@@ -67,6 +69,7 @@ class WakeWordDetector(
             )
             require(recorder?.state == AudioRecord.STATE_INITIALIZED) { "Nem sikerült megnyitni a mikrofont." }
             running = true
+            wakeTriggered = false
             paused = false
             recorder?.startRecording()
             worker = thread(name = "GepJozsiAudio") { audioLoop() }
@@ -113,6 +116,7 @@ class WakeWordDetector(
             recorder = freshRecorder
             freshRecorder.startRecording()
             resetAudioWindow = true
+            wakeTriggered = false
             paused = false
             onStatus("Újra GépJózsi ébresztőszóra figyelek.")
             Log.i(TAG, "A mikrofon új AudioRecord példánnyal újraindult.")
@@ -207,6 +211,8 @@ class WakeWordDetector(
                 continue
             }
             for (i in 0 until count) {
+                // Ébresztés után a már beolvasott puffer további mintáit se dolgozzuk fel.
+                if (paused || wakeTriggered) break
                 val sample = shortBuffer[i] / 32768.0f
                 window[writeIndex] = sample
                 writeIndex = (writeIndex + 1) % WINDOW_SAMPLES
@@ -225,11 +231,16 @@ class WakeWordDetector(
                             if (recentDetections.size > 3) recentDetections.removeFirst()
                             val positiveCount = recentDetections.count { it }
                             Log.d(TAG, "Pozitív ébresztőszó-ablak: $positiveCount/${recentDetections.size}")
-                            if (recentDetections.size == 3 && positiveCount >= 2) {
+                            if (recentDetections.size == 3 && positiveCount >= 2 && !wakeTriggered) {
+                                // Még a callback előtt lezárjuk a detektort. Így a főszálra
+                                // várakozás alatt sem keletkezhet második/harmadik pittyenés.
+                                wakeTriggered = true
+                                paused = true
                                 recentDetections.clear()
                                 lastWakeAt = SystemClock.elapsedRealtime()
-                                Log.i(TAG, "GépJózsi felismerés megerősítve: $score")
+                                Log.i(TAG, "GépJózsi felismerés megerősítve, detektor zárolva: $score")
                                 onWakeWord(score)
+                                break
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Inference failed", e)
